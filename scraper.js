@@ -4,16 +4,12 @@ const fs = require('fs');
 const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 require('dotenv').config();
 
-// VERSION: 3.9 - NUCLEAR RESET TO PAGE 1
+// VERSION: 4.0 - DEEP SCRAPING MODE (EXTRACT ACTUAL ID)
 async function scrapeListings(targetCount = 1217, email, password) {
-    console.log('--- SCRAPER ENGINE v3.9 STARTING (NUCLEAR RESET MODE) ---');
+    console.log('--- SCRAPER ENGINE v4.0 STARTING (DEEP SCRAPE MODE) ---');
     const userDataDir = path.join(__dirname, 'user_data');
     const finalEmail = email || process.env.EMAIL;
     const finalPassword = password || process.env.PASSWORD;
-
-    console.log(`User Data: ${userDataDir}`);
-    console.log(`Target: ${targetCount}`);
-    console.log(`Creds: ${finalEmail}`);
 
     const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
     lockFiles.forEach(file => {
@@ -81,49 +77,25 @@ async function scrapeListings(targetCount = 1217, email, password) {
     };
 
     let state = await getPageState();
-    console.log(`Identified status: ${state.raw}`);
-
-    // NUCLEAR RESET TO PAGE 1
-    if (state.start !== 1) {
-        console.log('Resetting to Page 1 via input bypass...');
+    if (state.start !== 1 && state.total > 0) {
+        console.log('Resetting to Page 1...');
         const pageInput = await page.$('input.go-to-page');
         if (pageInput) {
-            await pageInput.click();
             await pageInput.fill('1');
             await pageInput.press('Enter');
-            console.log('Sent Page 1 command. Waiting for refresh...');
             await page.waitForTimeout(10000);
             state = await getPageState();
-            console.log(`Status after nuclear reset: ${state.raw}`);
-        } else {
-            console.log('Input box not found. Trying First Page link...');
-            const firstLink = await page.$('.paging a.firstPage, a[data-page-number="1"]');
-            if (firstLink) {
-                await page.evaluate(el => el.click(), firstLink);
-                await page.waitForTimeout(10000);
-                state = await getPageState();
-                console.log(`Status after link reset: ${state.raw}`);
-            }
         }
-    }
-
-    // Safety final check
-    if (state.start !== 1 && state.total > 0) {
-        console.log('CRITICAL: Failed to reset to Page 1. Retrying with Direct Navigation...');
-        await page.goto(`${baseUrl}&page=1&pageSize=10`);
-        await page.waitForTimeout(10000);
-        state = await getPageState();
-        console.log(`Status after direct URL reset: ${state.raw}`);
     }
 
     const actualTotal = state.total || targetCount;
     const itemsPerPage = state.perPage || 10;
     const totalPages = Math.ceil(actualTotal / itemsPerPage);
 
-    console.log(`Plan: Collect ${actualTotal} items across ${totalPages} pages.`);
-
     let allItems = [];
     let currentPageNum = 1;
+
+    console.log(`Plan: Deep scrape ${actualTotal} items across ${totalPages} pages.`);
 
     while (currentPageNum <= totalPages) {
         console.log(`Scraping page ${currentPageNum}/${totalPages}...`);
@@ -132,30 +104,50 @@ async function scrapeListings(targetCount = 1217, email, password) {
             await page.waitForSelector('.listingCell', { timeout: 20000 });
         } catch (e) {
             console.log('Items not found. Saving diagnostic screenshot...');
-            await page.screenshot({ path: `failure_v3.9_p${currentPageNum}.png` });
+            await page.screenshot({ path: `failure_v4.0_p${currentPageNum}.png` });
             break;
         }
 
+        // 1. Extract List Data and Detail Links
         const pageItems = await page.evaluate(() => {
             return Array.from(document.querySelectorAll('.listingCell')).map(cell => {
                 const text = cell.innerText;
                 const idLink = cell.querySelector('.colTitles div a[href*="Listing.aspx"]');
-                const titleLink = cell.querySelector('.colTitles div a[title]');
+                const nameLink = cell.querySelector('.colTitles div a[title], .colTitles div a:not([href*="Listing.aspx"])');
                 const priceMatch = text.match(/Price:\s*\$([\d,.]+)/i) || text.match(/Buy Now Price:\s*\$([\d,.]+)/i);
 
                 return {
                     sku: idLink ? idLink.innerText.trim() : '',
-                    title: titleLink ? titleLink.innerText.trim() : '',
+                    title: nameLink ? nameLink.innerText.trim() : '',
                     price: priceMatch ? priceMatch[1] : '',
-                    bids: text.match(/Bids\s*(\d+)/i)?.[1] || '0',
-                    watchers: text.match(/Watchers\s*(\d+)/i)?.[1] || '0',
-                    closing: text.match(/Closes in\s*([^)]+)/i)?.[1] || ''
+                    detailUrl: nameLink ? nameLink.href : null,
+                    actualId: 'Pending...'
                 };
             }).filter(item => item.sku || item.title);
         });
 
+        // 2. Perform Deep Scrape for each item
+        const detailPage = await browserContext.newPage();
+        for (let i = 0; i < pageItems.length; i++) {
+            const item = pageItems[i];
+            if (item.detailUrl) {
+                console.log(`   [${i + 1}/${pageItems.length}] Extracting Actual ID for: ${item.title}`);
+                try {
+                    await detailPage.goto(item.detailUrl, { timeout: 30000 });
+                    const actualId = await detailPage.evaluate(() => {
+                        return document.querySelector('#content-title .title h1')?.innerText.trim() || 'Not Found';
+                    });
+                    item.actualId = actualId;
+                } catch (err) {
+                    console.log(`   ⚠️ Failed to load details for ${item.title}`);
+                    item.actualId = 'Error';
+                }
+            }
+        }
+        await detailPage.close();
+
         allItems = allItems.concat(pageItems);
-        console.log(`Page ${currentPageNum} collected ${pageItems.length} items. Total: ${allItems.length}`);
+        console.log(`Page ${currentPageNum} completed. Total items: ${allItems.length}`);
 
         if (allItems.length >= targetCount) break;
 
@@ -163,7 +155,7 @@ async function scrapeListings(targetCount = 1217, email, password) {
         const nextBtn = await page.$('.nextPage:not(.disabled), a:has-text("Next"), .paging a:has-text("Next")');
 
         if (nextBtn) {
-            console.log('Moving to next page...');
+            console.log('Moving to next grid page...');
             await page.evaluate(el => el.click(), nextBtn);
 
             let changed = false;
@@ -175,13 +167,9 @@ async function scrapeListings(targetCount = 1217, email, password) {
                     break;
                 }
             }
-            if (!changed) {
-                console.log('Warning: Page transition stalled.');
-                break;
-            }
+            if (!changed) break;
             currentPageNum++;
         } else {
-            console.log('End of sequence.');
             break;
         }
     }
@@ -190,11 +178,9 @@ async function scrapeListings(targetCount = 1217, email, password) {
         path: path.join(__dirname, 'listings.csv'),
         header: [
             { id: 'sku', title: 'SKU/ID' },
+            { id: 'actualId', title: 'Actual ID' },
             { id: 'title', title: 'Title' },
-            { id: 'price', title: 'Price' },
-            { id: 'bids', title: 'Bids' },
-            { id: 'watchers', title: 'Watchers' },
-            { id: 'closing', title: 'Closing Time' }
+            { id: 'price', title: 'Price' }
         ]
     });
 

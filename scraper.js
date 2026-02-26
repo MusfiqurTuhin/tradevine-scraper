@@ -206,7 +206,12 @@ async function scrapeListings(targetCount = 1217, email, password) {
 }
 
 if (require.main === module) {
-    scrapeListings().catch(err => {
+    const args = process.argv.slice(2);
+    const targetCount = args[0] ? parseInt(args[0]) : 1217;
+    const email = args[1] || process.env.EMAIL;
+    const password = args[2] || process.env.PASSWORD;
+
+    scrapeListings(targetCount, email, password).catch(err => {
         console.error('Fatal engine error:', err);
         process.exit(1);
     });

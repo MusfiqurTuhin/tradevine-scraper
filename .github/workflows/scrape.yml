@@ -1,9 +1,18 @@
 name: Tradevine Scraper
 
 on:
-  schedule:
-    - cron: '0 0 * * *' # Runs daily at midnight
   workflow_dispatch: # Allows manual trigger from GitHub UI
+    inputs:
+      email:
+        description: 'Tradevine Email'
+        required: true
+      password:
+        description: 'Tradevine Password'
+        required: true
+      targetCount:
+        description: 'Target Item Count'
+        default: '1217'
+        required: false
 
 jobs:
   scrape:
@@ -26,9 +35,10 @@ jobs:
 
       - name: Run Scraper
         env:
-          EMAIL: ${{ secrets.EMAIL }}
-          PASSWORD: ${{ secrets.PASSWORD }}
-        run: node scraper.js
+          EMAIL: ${{ github.event.inputs.email }}
+          PASSWORD: ${{ github.event.inputs.password }}
+          TARGET: ${{ github.event.inputs.targetCount }}
+        run: node scraper.js "$TARGET" "$EMAIL" "$PASSWORD"
 
       - name: Upload Results
         uses: actions/upload-artifact@v4

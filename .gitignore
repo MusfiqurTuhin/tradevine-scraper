@@ -1,8 +1,13 @@
-node_modules/
-user_data/
+# Python
+__pycache__/
+*.py[cod]
+*.env
+venv/
 .env
-*.png
-*.html
-listings.csv
+*.log
+dist/
+build/
+*.egg-info/
+.pytest_cache/
 .DS_Store
-package-lock.json
+*.sqlite3
